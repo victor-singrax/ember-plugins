@@ -19,11 +19,8 @@ for (const plugin of await readdir('plugins', { withFileTypes: true })) {
     banner: { js: banner },
   });
   const metadata = Object.fromEntries([...source.matchAll(/^\/\/ @(\w+) (.+)$/gm)].map(match => [match[1], match[2]]));
-  if (plugin.name !== 'double-click-voice') {
-    await copyFile(`dist/${plugin.name}.js`, `catalog/${plugin.name}.js`);
-    catalog.push({ name: plugin.name, description: metadata.description, version: metadata.version, author: metadata.author,
-      ...(plugin.name === 'volume-booster' ? { warning: 'Experimental: requires Solaris v0.1.0 or newer; audio gain above 200% still needs client verification.' } : {}) });
-  }
+  await copyFile(`dist/${plugin.name}.js`, `catalog/${plugin.name}.js`);
+  catalog.push({ name: plugin.name, description: metadata.description, version: metadata.version, author: metadata.author });
 }
 await writeFile('catalog/index.json', JSON.stringify(catalog, null, 2) + '\n');
 

@@ -53,10 +53,4 @@ Independent project; not affiliated with Discord or Sunbird.
 
 Plugin sources live in `plugins/<name>/index.ts`. Shared modules are TypeScript too. The build runs strict type checking against the vendored Solaris declarations in `types/phoenix.d.ts`, then esbuild produces standalone `dist/<name>.js` bundles for QuickJS. No TypeScript runtime, Node.js or browser globals are needed in Discord.
 
-Run `npm run typecheck` for type errors, or `npm test` to type-check, build both plugins and run the behavior tests against compiled modules and bundles. Generated test modules live in `.test-build/` and are ignored by Git.
-
-The TypeScript conversion does not repair Double Click Voice's native Rust hook; that plugin still needs its separate runtime fix.
-
-## Volume Booster
-
-Raises the native per-user voice volume slider maximum from 200% to 400%. The plugin requests a Solaris runtime extension; disabling or unloading it restores the native 200% limit. Requires Solaris on Windows x64 and a Phoenix build with the supported slider signature.
+Run `npm run typecheck` for type errors, or `npm test` to type-check, build the plugin and run the behavior tests against compiled modules and bundles. Generated test modules live in `.test-build/` and are ignored by Git.

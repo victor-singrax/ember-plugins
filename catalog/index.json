@@ -4,12 +4,5 @@
     "description": "Toggle game activity sharing from the desktop account panel. Requires Solaris.",
     "version": "0.1.2",
     "author": "victor-singrax"
-  },
-  {
-    "name": "volume-booster",
-    "description": "Raises the per-user voice volume slider limit from 200% to 400%.",
-    "version": "0.1.0",
-    "author": "victor-singrax",
-    "warning": "Experimental: requires Solaris v0.1.0 or newer; audio gain above 200% still needs client verification."
   }
 ]
