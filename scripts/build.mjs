@@ -1,5 +1,8 @@
 import { build } from 'esbuild';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, mkdir, copyFile, writeFile } from 'node:fs/promises';
+
+const catalog = [];
+await mkdir('catalog', { recursive: true });
 
 for (const plugin of await readdir('plugins', { withFileTypes: true })) {
   if (!plugin.isDirectory()) continue;
@@ -15,6 +18,13 @@ for (const plugin of await readdir('plugins', { withFileTypes: true })) {
     target: 'es2023',
     banner: { js: banner },
   });
+  const metadata = Object.fromEntries([...source.matchAll(/^\/\/ @(\w+) (.+)$/gm)].map(match => [match[1], match[2]]));
+  if (plugin.name !== 'double-click-voice') {
+    await copyFile(`dist/${plugin.name}.js`, `catalog/${plugin.name}.js`);
+    catalog.push({ name: plugin.name, description: metadata.description, version: metadata.version, author: metadata.author,
+      ...(plugin.name === 'volume-booster' ? { warning: 'Experimental: requires Solaris v0.1.0 or newer; audio gain above 200% still needs client verification.' } : {}) });
+  }
 }
+await writeFile('catalog/index.json', JSON.stringify(catalog, null, 2) + '\n');
 
 await build({entryPoints: ['plugins/game-activity-toggle/proto.ts', 'plugins/game-activity-toggle/controller.ts'], outdir: '.test-build', bundle: true, format: 'esm', platform: 'neutral', target: 'es2023'});
