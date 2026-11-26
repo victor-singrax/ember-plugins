@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/sunbird-tools/sunbird.git",
+  "commit": "10f30b3390d52d12e23e28ead49dcca8e2df32ef",
+  "patch": "runtime/sunbird-user-panel.patch",
+  "platform": "windows-x64",
+  "testedPhoenixBuild": 2208
+}

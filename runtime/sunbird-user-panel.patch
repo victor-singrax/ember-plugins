@@ -1,0 +1,455 @@
+diff --git a/crates/runtime-desktop/src/js/mod.rs b/crates/runtime-desktop/src/js/mod.rs
+index d4aaa0a..0f6f13c 100644
+--- a/crates/runtime-desktop/src/js/mod.rs
++++ b/crates/runtime-desktop/src/js/mod.rs
+@@ -29,6 +29,7 @@ use crate::{
+ /// next to the core's registry.
+ #[derive(Default)]
+ pub struct Desktop<'js> {
++   pub panel_buttons: RefCell<Vec<ui::PanelButton<'js>>>,
+    /// `phoenix.ui.addMessageAccessory` callbacks.
+    pub accessories:   RefCell<Vec<DesktopAccessory<'js>>>,
+    /// `phoenix.ui.addMessageAction` callbacks.
+@@ -51,6 +52,18 @@ pub fn unload(ctx: &Ctx<'_>, name: &str) {
+    let Some(registry) = ctx.userdata::<Desktop<'_>>() else {
+       return;
+    };
++   registry
++      .panel_buttons
++      .borrow_mut()
++      .retain(|button| button.plugin != name);
++   crate::user_panel::sync(
++      registry
++         .panel_buttons
++         .borrow()
++         .iter()
++         .map(ui::PanelButton::meta)
++         .collect(),
++   );
+    let mut list = registry.accessories.borrow_mut();
+    let before = list.len();
+    list.retain(|entry| entry.plugin != name);
+diff --git a/crates/runtime-desktop/src/js/ui.rs b/crates/runtime-desktop/src/js/ui.rs
+index 8513e9c..f12872a 100644
+--- a/crates/runtime-desktop/src/js/ui.rs
++++ b/crates/runtime-desktop/src/js/ui.rs
+@@ -101,6 +101,120 @@ fn noop_handle<'js>(ctx: &Ctx<'js>) -> rquickjs::Result<Function<'js>> {
+    Ok(remove)
+ }
+ 
++#[derive(Clone)]
++pub struct PanelButton<'js> {
++   pub plugin: String,
++   pub button: crate::user_panel::Button,
++   pub on_press: Function<'js>,
++}
++impl PanelButton<'_> {
++   pub fn meta(&self) -> crate::user_panel::Button {
++      self.button.clone()
++   }
++}
++
++pub fn invoke_panel_button(engine: &Engine, id: u64) {
++   engine.with(|ctx| {
++      let entry = ctx.userdata::<Desktop<'_>>().and_then(|registry| {
++         registry
++            .panel_buttons
++            .borrow()
++            .iter()
++            .find(|entry| entry.button.id == id)
++            .cloned()
++      });
++      if let Some(entry) = entry
++         && let Err(err) = entry.on_press.call::<_, Value<'_>>(()).catch(&ctx)
++      {
++         log::error!("[{}] user panel button: {err}", entry.plugin);
++      }
++   });
++}
++
++fn add_panel_button<'js>(
++   ctx: &Ctx<'js>,
++   plugin: &str,
++   options: &Object<'js>,
++) -> rquickjs::Result<Function<'js>> {
++   static NEXT: AtomicU64 = AtomicU64::new(1);
++   if !crate::user_panel::available() {
++      return Err(Exception::throw_message(
++         ctx,
++         "User panel buttons unavailable on this Phoenix build",
++      ));
++   }
++   let id = NEXT.fetch_add(1, Ordering::Relaxed);
++   let entry = PanelButton {
++      plugin: plugin.into(),
++      button: crate::user_panel::Button {
++         id,
++         glyph: options.get("glyph")?,
++         active: options.get::<_, Option<bool>>("active")?.unwrap_or(false),
++         busy: options.get::<_, Option<bool>>("busy")?.unwrap_or(false),
++      },
++      on_press: options.get("onPress")?,
++   };
++   let registry = ctx
++      .userdata::<Desktop<'js>>()
++      .ok_or_else(|| Exception::throw_internal(ctx, "no registry"))?;
++   registry.panel_buttons.borrow_mut().push(entry);
++   crate::user_panel::sync(
++      registry
++         .panel_buttons
++         .borrow()
++         .iter()
++         .map(PanelButton::meta)
++         .collect(),
++   );
++   let remove = Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
++      if let Some(registry) = ctx.userdata::<Desktop<'js>>() {
++         registry
++            .panel_buttons
++            .borrow_mut()
++            .retain(|entry| entry.button.id != id);
++         crate::user_panel::sync(
++            registry
++               .panel_buttons
++               .borrow()
++               .iter()
++               .map(PanelButton::meta)
++               .collect(),
++         );
++      }
++   })?;
++   remove.set(
++      "update",
++      Function::new(ctx.clone(), move |ctx: Ctx<'js>, patch: Object<'js>| {
++         if let Some(registry) = ctx.userdata::<Desktop<'js>>() {
++            {
++               let mut list = registry.panel_buttons.borrow_mut();
++               if let Some(entry) = list.iter_mut().find(|entry| entry.button.id == id) {
++                  if let Some(value) = patch.get::<_, Option<bool>>("active")? {
++                     entry.button.active = value;
++                  }
++                  if let Some(value) = patch.get::<_, Option<bool>>("busy")? {
++                     entry.button.busy = value;
++                  }
++                  if let Some(value) = patch.get::<_, Option<String>>("glyph")? {
++                     entry.button.glyph = value;
++                  }
++               }
++            }
++            crate::user_panel::sync(
++               registry
++                  .panel_buttons
++                  .borrow()
++                  .iter()
++                  .map(PanelButton::meta)
++                  .collect(),
++            );
++         }
++         Ok::<_, rquickjs::Error>(())
++      })?,
++   )?;
++   Ok(remove)
++}
++
+ fn parse_rendered(value: &Value<'_>, priority: i32) -> Option<RenderedAccessory> {
+    if value.is_null() || value.is_undefined() || value.as_bool() == Some(false) {
+       return None;
+@@ -651,6 +765,13 @@ pub fn desktop_ui_object<'js>(ctx: &Ctx<'js>, plugin: &str) -> rquickjs::Result<
+       })?,
+    )?;
+ 
++   let panel_owner = plugin.to_owned();
++   ui.set(
++      "addUserPanelButton",
++      Function::new(ctx.clone(), move |ctx: Ctx<'js>, options: Object<'js>| {
++         add_panel_button(&ctx, &panel_owner, &options)
++      })?,
++   )?;
+    let owner = plugin.to_owned();
+    ui.set(
+       "addMessageAccessory",
+diff --git a/crates/runtime-desktop/src/lib.rs b/crates/runtime-desktop/src/lib.rs
+index 3ce135f..13679dc 100644
+--- a/crates/runtime-desktop/src/lib.rs
++++ b/crates/runtime-desktop/src/lib.rs
+@@ -16,6 +16,7 @@ mod modal;
+ mod os;
+ mod settings;
+ mod staff;
++mod user_panel;
+ 
+ use std::{
+    ffi::c_void,
+@@ -113,6 +114,7 @@ pub fn prepare() -> Result<(), Error> {
+    message::install(&image);
+    badges::install(&image);
+    emoji::install(&image);
++   user_panel::install(&image);
+    <os::Os as os::DesktopOs>::install(&image);
+    let registry = phoenix_runtime::hook(&image);
+    if registry.is_ok() {
+diff --git a/crates/runtime-desktop/src/user_panel.rs b/crates/runtime-desktop/src/user_panel.rs
+new file mode 100644
+index 0000000..2501bda
+--- /dev/null
++++ b/crates/runtime-desktop/src/user_panel.rs
+@@ -0,0 +1,181 @@
++//! Plugin controls immediately before the native microphone split button.
++use crate::{
++   accessories,
++   gpui::{self, BtnSize, BtnVariant, RawAnyElement, RcFnVtbl},
++};
++use phoenix_hook::{image::Image, x86::Abi};
++use phoenix_sigs::desktop;
++use std::{
++   ffi::c_void,
++   ptr,
++   sync::{LazyLock, Mutex, OnceLock, PoisonError, mpsc},
++};
++
++#[derive(Clone)]
++pub struct Button {
++   pub id: u64,
++   pub glyph: String,
++   pub active: bool,
++   pub busy: bool,
++}
++static BUTTONS: LazyLock<Mutex<Vec<Button>>> = LazyLock::new(|| Mutex::new(Vec::new()));
++static ORIG: OnceLock<Render> = OnceLock::new();
++static CLICK: OnceLock<mpsc::Sender<u64>> = OnceLock::new();
++type Render = unsafe extern "C" fn(
++   *mut RawAnyElement,
++   usize,
++   usize,
++   usize,
++   usize,
++   usize,
++   usize,
++   usize,
++   usize,
++   usize,
++   usize,
++   usize,
++   usize,
++   usize,
++   usize,
++) -> *mut RawAnyElement;
++
++pub fn available() -> bool {
++   ORIG.get().is_some()
++}
++
++pub fn sync(buttons: Vec<Button>) {
++   *BUTTONS.lock().unwrap_or_else(PoisonError::into_inner) = buttons;
++   CLICK.get_or_init(|| {
++      let (tx, rx) = mpsc::channel();
++      let _ = std::thread::Builder::new()
++         .name("sunbird-panel".into())
++         .spawn(move || {
++            while let Ok(id) = rx.recv() {
++               if let Some(engine) = phoenix_runtime::engine() {
++                  crate::js::ui::invoke_panel_button(&engine, id);
++               }
++            }
++         });
++      tx
++   });
++   accessories::invalidate_discord_windows();
++}
++
++static CALLBACK: RcFnVtbl = RcFnVtbl {
++   drop_in_place: ptr::null(),
++   size: size_of::<u64>(),
++   align: align_of::<u64>(),
++   call_once: click as *const c_void,
++   call_mut: click as *const c_void,
++   call: click as *const c_void,
++   extra: ptr::null(),
++};
++
++unsafe extern "C" fn click(id: *const u64, _event: usize, _window: usize, _app: usize) {
++   if id.is_null() {
++      return;
++   }
++   // SAFETY: GPUI passes the Rc payload allocated by build_raw_button.
++   let id = unsafe { *id };
++   let allowed = BUTTONS
++      .lock()
++      .unwrap_or_else(PoisonError::into_inner)
++      .iter()
++      .any(|button| button.id == id && !button.busy);
++   if allowed && let Some(tx) = CLICK.get() {
++      let _ = tx.send(id);
++   }
++}
++
++pub fn install(image: &Image<'static>) {
++   if !gpui::supports_push_any() {
++      return;
++   }
++   let func = match desktop::user_panel_controls(image) {
++      Ok(func) => func,
++      Err(err) => {
++         log::warn!("desktop user panel: {err}");
++         return;
++      },
++   };
++   let pro = desktop::Prologues::of(Abi::of(image)).frame;
++   // SAFETY: the locator validates the Win64 renderer's stack/argument layout.
++   match unsafe { image.hook_entry(func, pro.pattern, pro.len, render as *const () as usize) } {
++      Ok(trampoline) => {
++         // SAFETY: this trampoline has the verified renderer signature.
++         let _ = ORIG.set(unsafe { std::mem::transmute::<usize, Render>(trampoline) });
++         log::info!("desktop user panel: hooked controls @ {func:#x}");
++      },
++      Err(err) => log::warn!("desktop user panel: {err}"),
++   }
++}
++
++#[allow(clippy::too_many_arguments)]
++unsafe extern "C" fn render(
++   sret: *mut RawAnyElement,
++   a2: usize,
++   a3: usize,
++   a4: usize,
++   a5: usize,
++   deafen: usize,
++   a7: usize,
++   a8: usize,
++   a9: usize,
++   a10: usize,
++   a11: usize,
++   a12: usize,
++   a13: usize,
++   a14: usize,
++   a15: usize,
++) -> *mut RawAnyElement {
++   let Some(orig) = ORIG.get() else {
++      return sret;
++   };
++   // SAFETY: forward every original argument; the first four are register arguments.
++   let out = unsafe {
++      orig(
++         sret, a2, a3, a4, a5, deafen, a7, a8, a9, a10, a11, a12, a13, a14, a15,
++      )
++   };
++   if deafen & 255 != 0 || sret.is_null() {
++      return out;
++   }
++   let buttons = BUTTONS
++      .lock()
++      .unwrap_or_else(PoisonError::into_inner)
++      .clone();
++   if buttons.is_empty() {
++      return out;
++   }
++   let _ = std::panic::catch_unwind(|| {
++      let Some(mut row) = gpui::h_row(2.0, false) else {
++         return;
++      };
++      for button in buttons {
++         let variant = if button.active {
++            BtnVariant::Secondary
++         } else {
++            BtnVariant::Critical
++         };
++         let text = if button.busy { "…" } else { &button.glyph };
++         if let Some(btn) = gpui::build_raw_button(
++            &format!("sunbird-panel-{}", button.id),
++            text,
++            variant,
++            BtnSize::Small,
++            &raw const CALLBACK,
++            button.id,
++         ) {
++            row = gpui::push_raw_button(row, btn);
++         }
++      }
++      // SAFETY: take the returned AnyElement exactly once and move it into its new parent.
++      let mut original = unsafe { ptr::read(sret) };
++      if gpui::push_any(&mut row, &mut original) {
++         gpui::write_any(row, sret);
++      } else {
++         unsafe { ptr::write(sret, original) };
++      }
++   });
++   out
++}
+diff --git a/crates/runtime/phoenix.d.ts b/crates/runtime/phoenix.d.ts
+index 310c536..87d3c0a 100644
+--- a/crates/runtime/phoenix.d.ts
++++ b/crates/runtime/phoenix.d.ts
+@@ -1320,6 +1320,16 @@ declare namespace Phoenix {
+   /// land a moment after the screen they belong to. Everything goes away when the plugin is
+   /// turned off.
+   interface Ui {
++    /// Ember extension for Windows desktop. Throws if the native renderer is unsupported.
++    /// `active: false` uses the critical color; `busy` ignores presses and shows an ellipsis.
++    addUserPanelButton?(options: {
++      glyph: string;
++      active?: boolean;
++      busy?: boolean;
++      onPress(): void;
++    }): (() => void) & {
++      update(patch: { glyph?: string; active?: boolean; busy?: boolean }): void;
++    };
+     /// In the chat header, left of search.
+     addHeaderButton(options: ButtonOptions): ButtonRemover;
+     /// In the message box, left of the emoji button.
+diff --git a/crates/sigs/src/desktop.rs b/crates/sigs/src/desktop.rs
+index 775fe12..5df07cb 100644
+--- a/crates/sigs/src/desktop.rs
++++ b/crates/sigs/src/desktop.rs
+@@ -1466,6 +1466,38 @@ pub struct MessageRow {
+    pub msg_id_offset: usize,
+ }
+ 
++/// Windows' account mute/deafen renderer, shared by the two split controls.
++/// Its sixth argument selects deafen; the false branch is the microphone.
++/// Fail closed when the frame/argument layout changes.
++pub fn user_panel_controls(image: &Image<'_>) -> Found<usize> {
++   if Abi::of(image) != Abi::Win64 {
++      return Err("user panel buttons currently require Win64".to_owned());
++   }
++   let funcs = string_leas(image, &[b"user-panel-mute", b"user-panel-deafen"]);
++   let funcs: HashSet<_> = funcs
++      .into_values()
++      .flatten()
++      .filter_map(|site| image.function_bounds(site).map(|(start, _)| start))
++      .collect();
++   let candidates: Vec<_> = funcs
++      .into_iter()
++      .filter(|&func| prologues(image).frame.at(image, func))
++      .collect();
++   let func = one("account mute/deafen renderer", &candidates)?;
++   let code = function_code(image, func, "account controls")?;
++   // This ABI is explicitly validated, rather than applying a hook to an unknown frame.
++   if !code.starts_with(&[
++      0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC,
++      0x28, 0x0F, 0, 0,
++   ]) || !code
++      .windows(7)
++      .any(|w| w == [0x80, 0xBD, 0x18, 0x0F, 0, 0, 0])
++   {
++      return Err("account control argument layout changed".to_owned());
++   }
++   Ok(func)
++}
++
+ /// The one function calling every helper that formats `message-content-{id}`.
+ pub fn message_row(image: &Image<'_>) -> Found<MessageRow> {
+    /// `lea rax, [rcx + disp32]`, the id the template formats.
+diff --git a/crates/sigscan/src/main.rs b/crates/sigscan/src/main.rs
+index 4a7f1de..806de0e 100644
+--- a/crates/sigscan/src/main.rs
++++ b/crates/sigscan/src/main.rs
+@@ -189,6 +189,9 @@ fn check(image: &Image<'_>, machine: Machine, macho: bool) -> misstep::Result<()
+                .map(|section| format!("{} (page +{:#x})", at(section.func), section.page_offset)),
+          );
+          let gpui = desktop::gpui(image);
++         if abi == x86::Abi::Win64 {
++            report("user panel controls", desktop::user_panel_controls(image).map(at));
++         }
+          // The runtime skips message accessories without the text and push
+          // primitives, so a miss here is a miss of the builders.
+          report(

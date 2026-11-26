@@ -1,10 +1,16 @@
+import type { ActivityPatch } from './proto.js';
+export interface ActivityState { enabled: boolean | null; busy: boolean; }
+interface SettingsResponse { settings?: unknown; out_of_date?: boolean; }
+interface Response { ok: boolean; status: number; json(): SettingsResponse; }
+export interface ActivityTransport { get(path: string): Promise<Response>; patch(path: string, body: ActivityPatch): Promise<Response>; }
 import { activityPatch, readActivity } from './proto.js';
 
 const path = '/users/@me/settings-proto/1';
 
-export function createActivityController(discord, changed) {
-  let disposed = false, busy = false, enabled = null, desired = null;
-  let saving = null, revision = 0;
+export function createActivityController(discord: ActivityTransport, changed: (state: ActivityState) => void) {
+  let disposed = false, busy = false, enabled: boolean | null = null, desired: boolean | null = null;
+  let saving: Promise<void> | null = null;
+  let revision = 0;
   const emit = () => { if (!disposed) changed({ enabled: desired ?? enabled, busy }); };
   async function read() {
     const response = await discord.get(path);
@@ -36,7 +42,7 @@ export function createActivityController(discord, changed) {
     }
   }
   return {
-    observe(settings) {
+    observe(settings: unknown) {
       if (disposed || busy) return;
       enabled = readActivity(settings).enabled;
       revision++; emit();

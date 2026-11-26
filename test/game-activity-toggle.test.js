@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { activityPatch, readActivity, encodeBase64, decodeBase64 } from '../plugins/game-activity-toggle/proto.js';
-import { createActivityController } from '../plugins/game-activity-toggle/controller.js';
+import { activityPatch, readActivity, encodeBase64, decodeBase64 } from '../.test-build/proto.js';
+import { createActivityController } from '../.test-build/controller.js';
 
 const encoded = bytes => Buffer.from(bytes).toString('base64');
 const reply = (settings, extra = {}) => ({ ok: true, status: 200, json: () => ({ settings, ...extra }) });

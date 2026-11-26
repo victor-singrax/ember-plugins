@@ -6,9 +6,12 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "pretest": "npm run build",
-    "test": "node --test"
+    "test": "node --test",
+    "typecheck": "tsc --noEmit",
+    "prebuild": "npm run typecheck"
   },
   "devDependencies": {
-    "esbuild": "^0.28.2"
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
   }
 }

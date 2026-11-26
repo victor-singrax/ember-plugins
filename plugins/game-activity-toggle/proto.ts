@@ -1,9 +1,12 @@
+export interface ActivitySnapshot { enabled: boolean; dataVersion?: number; status: number[]; }
+export interface ActivityPatch { settings: string; required_data_version?: number; }
+interface Field { number: number; wire: number; value?: number; raw: number[]; data: number[]; }
 // Preserve the complete status submessage, including fields unknown to this plugin.
 // Schema: discord-userdoccers/discord-protos, PreloadedUserSettings.status (11),
 // StatusSettings.show_current_game (3), google.protobuf.BoolValue.value (1).
 const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
-export function decodeBase64(text) {
+export function decodeBase64(text: unknown): number[] {
   if (typeof text !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(text)) {
     throw new Error('Invalid settings encoding');
   }
@@ -17,7 +20,7 @@ export function decodeBase64(text) {
   return bytes;
 }
 
-export function encodeBase64(bytes) {
+export function encodeBase64(bytes: readonly number[]): string {
   let result = '';
   for (let i = 0; i < bytes.length; i += 3) {
     const value = (bytes[i] << 16) | ((bytes[i + 1] ?? 0) << 8) | (bytes[i + 2] ?? 0);
@@ -28,7 +31,7 @@ export function encodeBase64(bytes) {
   return result;
 }
 
-function varint(bytes, offset) {
+function varint(bytes: readonly number[], offset: number): { value: number; offset: number } {
   let value = 0;
   for (let shift = 0; shift < 70; shift += 7) {
     if (offset >= bytes.length) throw new Error('Truncated settings');
@@ -39,8 +42,8 @@ function varint(bytes, offset) {
   throw new Error('Invalid settings varint');
 }
 
-function fields(bytes) {
-  const result = [];
+function fields(bytes: readonly number[]): Field[] {
+  const result: Field[] = [];
   let offset = 0;
   while (offset < bytes.length) {
     const start = offset;
@@ -64,7 +67,7 @@ function fields(bytes) {
   return result;
 }
 
-function messageFields(bytes, number) {
+function messageFields(bytes: readonly number[], number: number): number[] {
   return fields(bytes).filter(field => {
     if (field.number !== number) return false;
     if (field.wire !== 2) throw new Error('Unexpected settings field type');
@@ -72,7 +75,7 @@ function messageFields(bytes, number) {
   }).flatMap(field => field.data);
 }
 
-function lengthDelimited(number, bytes) {
+function lengthDelimited(number: number, bytes: readonly number[]): number[] {
   const tag = [], length = [];
   let value = number * 8 + 2;
   while (value > 127) { tag.push((value % 128) | 128); value = Math.floor(value / 128); }
@@ -83,7 +86,7 @@ function lengthDelimited(number, bytes) {
   return [...tag, ...length, ...bytes];
 }
 
-export function readActivity(settings) {
+export function readActivity(settings: unknown): ActivitySnapshot {
   const bytes = decodeBase64(settings);
   const status = messageFields(bytes, 11);
   const wrapped = fields(status).filter(field => field.number === 3);
@@ -91,7 +94,7 @@ export function readActivity(settings) {
   if (wrapped.length) {
     const values = fields(messageFields(status, 3)).filter(field => field.number === 1);
     if (values.some(field => field.wire !== 0)) throw new Error('Unexpected activity value');
-    enabled = values.length ? values.at(-1).value !== 0 : false;
+    enabled = values.length ? values.at(-1)?.value !== 0 : false;
   }
   const versions = fields(messageFields(bytes, 1)).filter(field => field.number === 3);
   const version = versions.at(-1);
@@ -99,11 +102,11 @@ export function readActivity(settings) {
   return { enabled, dataVersion: version?.value, status };
 }
 
-export function activityPatch(snapshot, enabled) {
+export function activityPatch(snapshot: ActivitySnapshot, enabled: boolean): ActivityPatch {
   const status = fields(snapshot.status).filter(field => field.number !== 3).flatMap(field => field.raw);
   // Send the entire status field, so custom status, expiration and unknown fields survive.
   status.push(...lengthDelimited(3, enabled ? [8, 1] : []));
-  const body = { settings: encodeBase64(lengthDelimited(11, status)) };
+  const body: ActivityPatch = { settings: encodeBase64(lengthDelimited(11, status)) };
   if (snapshot.dataVersion !== undefined) body.required_data_version = snapshot.dataVersion;
   return body;
 }

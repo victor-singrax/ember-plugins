@@ -163,3 +163,5 @@ work/
 *.dll
 *.exe
 *debug-shell-token*
+
+.test-build/
