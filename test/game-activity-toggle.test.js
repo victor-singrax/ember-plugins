@@ -50,7 +50,7 @@ test('long unknown status fields survive length boundaries', () => {
   assert.deepEqual(decodeBase64(patched.settings), [90, 150, 3, ...status, 26, 0]);
 });
 
-test('loading never changes the account and a click uses freshly fetched status', async () => {
+test('loading never changes the account and a click preserves the latest status', async () => {
   let writes = 0, value = encoded([90, 2, 26, 0]);
   const controller = createActivityController({
     get: async () => reply(value),
@@ -58,20 +58,21 @@ test('loading never changes the account and a click uses freshly fetched status'
   }, () => {});
   await controller.refresh();
   assert.equal(writes, 0);
-  value = encoded([90, 4, 26, 2, 8, 1]);
+  value = encoded([90, 5, 10, 1, 88, 26, 0]);
   await controller.toggle();
   assert.equal(writes, 1);
-  assert.equal(readActivity(value).enabled, false);
+  assert.equal(readActivity(value).enabled, true);
+  assert.deepEqual(readActivity(value).status.slice(0, 3), [10, 1, 88]);
 });
 
-test('rapid repeated clicks do not queue multiple changes', async () => {
+test('clicks before the initial preference is known share one read', async () => {
   let finish, writes = 0;
   const controller = createActivityController({
     get: () => new Promise(resolve => { finish = resolve; }),
     patch: async (_, body) => { writes++; return reply(body.settings); },
   }, () => {});
   const first = controller.toggle();
-  await controller.toggle();
+  assert.equal(controller.toggle(), first);
   finish(reply(''));
   await first;
   assert.equal(writes, 1);
@@ -95,4 +96,110 @@ test('unloading while reading prevents a queued settings write', async () => {
   const running = controller.toggle();
   controller.dispose(); finish(reply('')); await running;
   assert.equal(writes, 0);
+});
+
+const deferred = () => {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+};
+const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test('the icon updates before the settings read finishes and can cancel an unsent change', async () => {
+  const reading = deferred();
+  let last, writes = 0;
+  const controller = createActivityController({
+    get: () => reading.promise,
+    patch: async () => { writes++; },
+  }, state => { last = state; });
+  controller.observe('');
+  const first = controller.toggle();
+  assert.deepEqual(last, { enabled: false, busy: true });
+  assert.equal(controller.toggle(), first);
+  assert.deepEqual(last, { enabled: true, busy: true });
+  reading.resolve(reply(''));
+  await first;
+  assert.equal(writes, 0);
+  assert.deepEqual(last, { enabled: true, busy: false });
+});
+
+test('clicks during a save coalesce to the latest choice without stale color flashes', async () => {
+  const saving = deferred();
+  let value = '', last;
+  const targets = [];
+  const controller = createActivityController({
+    get: async () => reply(value),
+    patch: async (_, body) => {
+      targets.push(readActivity(body.settings).enabled);
+      if (targets.length === 1) await saving.promise;
+      value = body.settings;
+      return reply(value);
+    },
+  }, state => { last = state; });
+  controller.observe(value);
+  const first = controller.toggle();
+  await settle();
+  controller.toggle(); controller.toggle(); controller.toggle();
+  assert.deepEqual(last, { enabled: true, busy: true });
+  controller.observe('WgIaAA=='); // An older external response must not overwrite the latest click.
+  assert.equal(last.enabled, true);
+  saving.resolve();
+  await first;
+  assert.deepEqual(targets, [false, true]);
+  assert.deepEqual(last, { enabled: true, busy: false });
+});
+
+test('failed saves roll back the icon and leave the next click usable', async () => {
+  const saving = deferred();
+  let last, attempts = 0;
+  const controller = createActivityController({
+    get: async () => reply(''),
+    patch: async (_, body) => {
+      if (++attempts === 1) return saving.promise;
+      return reply(body.settings);
+    },
+  }, state => { last = state; });
+  controller.observe('');
+  const first = controller.toggle();
+  await settle();
+  saving.reject(new Error('Connection lost'));
+  await assert.rejects(first, /Connection lost/);
+  assert.deepEqual(last, { enabled: true, busy: false });
+  await controller.toggle();
+  assert.deepEqual(last, { enabled: false, busy: false });
+});
+
+test('one version conflict refreshes preserved fields and retries the same choice', async () => {
+  let value = '', writes = 0;
+  const controller = createActivityController({
+    get: async () => reply(value),
+    patch: async (_, body) => {
+      if (++writes === 1) {
+        value = encoded([90, 3, 10, 1, 88]);
+        return reply(value, { out_of_date: true });
+      }
+      value = body.settings;
+      return reply(value);
+    },
+  }, () => {});
+  controller.observe('');
+  await controller.toggle();
+  assert.equal(writes, 2);
+  assert.deepEqual(readActivity(value).status.slice(0, 3), [10, 1, 88]);
+  assert.equal(readActivity(value).enabled, false);
+});
+
+test('a slow background refresh cannot overwrite a newer completed click', async () => {
+  const reading = deferred();
+  let reads = 0, last;
+  const controller = createActivityController({
+    get: async () => ++reads === 1 ? reading.promise : reply(''),
+    patch: async (_, body) => reply(body.settings),
+  }, state => { last = state; });
+  controller.observe('');
+  const refresh = controller.refresh();
+  await controller.toggle();
+  reading.resolve(reply(''));
+  await refresh;
+  assert.deepEqual(last, { enabled: false, busy: false });
 });

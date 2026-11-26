@@ -3,7 +3,9 @@ A collection of plugins for Discord Phoenix, adding features, customization and 
 
 ## Game Activity Toggle
 
-Adds a native controller button immediately before the microphone in the desktop account panel. It uses Discord’s monochrome controller asset, a transparent background, a 20 px icon and a compact 32 px hit area. A red slash indicates that sharing is disabled. Pending requests ignore repeated presses.
+Adds a native controller button immediately before the microphone in the desktop account panel. It uses Discord’s controller asset, a transparent background, a 20 px icon and a compact 32 px hit area. The controller and slash turn red when sharing is disabled.
+
+The icon responds immediately to clicks while settings save in the background. Repeated clicks keep the latest choice without overlapping writes. A failed save restores the confirmed state and shows an error.
 
 Requires the current [Solaris runtime](https://github.com/victor-singrax/solaris) on Windows x64. Stock Sunbird does not expose the account-panel API. Unsupported Phoenix builds fail explicitly.
 

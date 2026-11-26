@@ -1,5 +1,5 @@
 // @description Toggle game activity sharing from the desktop account panel. Requires Solaris.
-// @version 0.1.1
+// @version 0.1.2
 // @author victor-singrax
 
 import { createActivityController } from './controller.js';
@@ -8,7 +8,7 @@ if (typeof phoenix.ui.addUserPanelButton !== 'function') {
   throw new Error('Game Activity Toggle requires the Ember Sunbird runtime extension. See the repository README.');
 }
 
-let button, sessionWatch;
+let button, sessionWatch, reported;
 let synchronized = false;
 const controller = createActivityController(phoenix.discord, ({ enabled, busy }) => {
   if (enabled !== null && !synchronized) {
@@ -16,9 +16,11 @@ const controller = createActivityController(phoenix.discord, ({ enabled, busy })
     sessionWatch?.();
     phoenix.log.info('Game Activity Toggle ready');
   }
-  button?.update({ active: enabled !== false, busy });
+  button?.update({ active: enabled !== false, busy: enabled === null && busy });
 });
 function report(error) {
+  if (error === reported) return;
+  reported = error;
   phoenix.log.error('Game Activity Toggle:', error.message);
   phoenix.ui.toast(error.message);
 }

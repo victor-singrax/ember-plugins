@@ -11,7 +11,7 @@ test('bundle explains when the native runtime extension is missing', () => {
 });
 
 test('standalone bundle waits for session, handles clicks and unloads without browser globals', async () => {
-  let session = false, writes = 0, button, unload, removed = false;
+  let session = false, writes = 0, button, unload, removed = false, finishPatch;
   let settings = 'WgIaAA=='; // status.show_current_game = false
   const observers = [];
   const errors = [];
@@ -33,7 +33,9 @@ test('standalone bundle waits for session, handles clicks and unloads without br
         return { ok: true, status: 200, json: () => ({ settings }) };
       },
       async patch(_, body) {
-        writes++; settings = body.settings;
+        writes++;
+        await new Promise(resolve => { finishPatch = resolve; });
+        settings = body.settings;
         return { ok: true, status: 200, json: () => ({ settings }) };
       },
       onResponse(filter, handler) {
@@ -56,8 +58,12 @@ test('standalone bundle waits for session, handles clicks and unloads without br
   assert.equal(button.active, false);
   assert.equal(button.busy, false);
   assert.equal(observers[0].active, false);
-  button.onPress(); await settle();
+  button.onPress();
+  assert.equal(button.active, true);
+  assert.equal(button.busy, false);
+  await settle();
   assert.equal(writes, 1);
+  finishPatch(); await settle();
   assert.equal(button.active, true);
   assert.equal(button.busy, false);
   unload();
